@@ -1,6 +1,6 @@
-## exa
+## sevenjay/exa
 
-**Author:** yevanchen
+**Author:** sevenjay
 **Version:** 0.1.0
 **Type:** tool
 

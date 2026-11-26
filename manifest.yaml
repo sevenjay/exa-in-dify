@@ -1,7 +1,8 @@
 version: 0.1.0
 type: plugin
-author: yevanchen
+author: sevenjay
 name: exa
+repo: https://github.com/sevenjay/exa-in-dify
 label:
   en_US: exa
   ja_JP: exa
