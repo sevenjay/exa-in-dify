@@ -1,239 +1,115 @@
 from collections.abc import Generator
-from typing import Any, Dict, List, Optional
-import os
-import requests
-from datetime import datetime
-import json
+from datetime import date, datetime
+from typing import Any
+from urllib.parse import urlsplit
 
 from dify_plugin import Tool
 from dify_plugin.entities.tool import ToolInvokeMessage
 
+from tools.exa_api import max_age_hours, post
+
+
+def _published_date(value: str) -> str:
+    try:
+        return f"{date.fromisoformat(value)}T00:00:00Z"
+    except ValueError:
+        timestamp = datetime.fromisoformat(value)
+        if timestamp.tzinfo is None:
+            raise ValueError("Publication dates with a time must include a time zone.")
+        return timestamp.isoformat()
+
+
 class ExaSearchTool(Tool):
-    # Backwards-compat mapping: livecrawl → maxAgeHours
-    _LIVECRAWL_TO_MAX_AGE = {
-        "always": 0,
-        "never": -1,
-        "fallback": 24,
-        "preferred": 0,
-        "auto": 24,
-    }
-
-    # Backwards-compat mapping: old search types → new
-    _SEARCH_TYPE_COMPAT = {
-        "neural": "auto",
-        "keyword": "auto",
-    }
-
     def _invoke(self, tool_parameters: dict[str, Any]) -> Generator[ToolInvokeMessage, None, None]:
         try:
-            # Get API key from runtime credentials
-            api_key = self.runtime.credentials["exa_api_key"]
-            
-            # Required parameter
-            query = tool_parameters.get("query")
+            query = (tool_parameters.get("query") or "").strip()
             if not query:
-                raise ValueError("Search query is required")
-                
-            # Optional parameters with defaults
-            search_type = tool_parameters.get("search_type", "auto")
-            # Backwards compat: map old search types
-            search_type = self._SEARCH_TYPE_COMPAT.get(search_type, search_type)
+                raise ValueError("Search query is required.")
 
-            num_results = int(tool_parameters.get("num_results", 10))
-            include_domains = tool_parameters.get("include_domains", "")
-            exclude_domains = tool_parameters.get("exclude_domains", "")
-            start_published_date = tool_parameters.get("start_published_date", "")
-            end_published_date = tool_parameters.get("end_published_date", "")
-            include_highlights = tool_parameters.get("include_highlights", True)
-            highlights_max_characters = tool_parameters.get("highlights_max_characters", None)
-            include_full_text = tool_parameters.get("include_text", False)
-            max_age_hours = tool_parameters.get("max_age_hours", None)
-            category = tool_parameters.get("category", None)
-            include_text_filter = tool_parameters.get("includeText", None)
-            exclude_text_filter = tool_parameters.get("excludeText", None)
+            search_type = tool_parameters.get("search_type") or "auto"
+            if search_type not in {"auto", "lite", "deep-lite", "deep"}:
+                raise ValueError("Search type must be Auto, Lite, Deep Lite, or Deep.")
+            age = max_age_hours(tool_parameters.get("max_age_hours"))
+            if search_type == "lite" and age is not None:
+                raise ValueError("Use Auto, Deep Lite, or Deep to set a maximum content age.")
 
-            # Backwards compat: map legacy use_autoprompt
-            use_autoprompt = tool_parameters.get("use_autoprompt", None)
-
-            # Backwards compat: map legacy livecrawl → maxAgeHours
-            livecrawl = tool_parameters.get("livecrawl", None)
-            if max_age_hours is None and livecrawl:
-                max_age_hours = self._LIVECRAWL_TO_MAX_AGE.get(livecrawl)
-            
-            # Process domain lists
-            include_domains_list = [d.strip() for d in include_domains.split(",")] if include_domains else []
-            exclude_domains_list = [d.strip() for d in exclude_domains.split(",")] if exclude_domains else []
-            
-            # Build request payload
-            payload: Dict[str, Any] = {
+            category = tool_parameters.get("category")
+            payload: dict[str, Any] = {
                 "query": query,
-                "numResults": num_results,
-                "type": search_type if search_type != "auto" else None,
-                "includeDomains": include_domains_list if include_domains_list else None,
-                "excludeDomains": exclude_domains_list if exclude_domains_list else None,
-                "startPublishedDate": start_published_date if start_published_date else None,
-                "endPublishedDate": end_published_date if end_published_date else None,
-                "category": category,
-                "includeText": [include_text_filter] if include_text_filter else None,
-                "excludeText": [exclude_text_filter] if exclude_text_filter else None,
+                "type": search_type,
+                "numResults": int(tool_parameters.get("num_results", 10)),
             }
+            if category:
+                payload["category"] = category
+            for name, field in (("include_domains", "includeDomains"), ("exclude_domains", "excludeDomains")):
+                values = (tool_parameters.get(name) or "").split(",")
+                domains = [value.strip() for value in values if value.strip()]
+                if domains:
+                    payload[field] = domains
+            for name, field in (
+                ("start_published_date", "startPublishedDate"),
+                ("end_published_date", "endPublishedDate"),
+            ):
+                value = (tool_parameters.get(name) or "").strip()
+                if value:
+                    if category in {"company", "people"}:
+                        raise ValueError("Company and People searches do not support publication date filters.")
+                    payload[field] = _published_date(value)
+            if category == "people" and "excludeDomains" in payload:
+                raise ValueError("People searches do not support domain exclusions.")
 
-            if use_autoprompt is not None:
-                payload["useAutoprompt"] = use_autoprompt
+            contents: dict[str, Any] = {}
+            if tool_parameters.get("include_highlights", True):
+                limit = tool_parameters.get("highlights_max_characters")
+                contents["highlights"] = {"maxCharacters": int(limit)} if limit is not None else True
+            if tool_parameters.get("include_text", False):
+                contents["text"] = True
+            if age is not None:
+                contents["maxAgeHours"] = age
+            if contents:
+                payload["contents"] = contents
 
-            if max_age_hours is not None:
-                payload["maxAgeHours"] = max_age_hours
-
-            # Remove None values from payload
-            payload = {k: v for k, v in payload.items() if v is not None}
-
-            # Build contents options — highlights default, text opt-in
-            contents_options: Dict[str, Any] = {}
-            if include_highlights:
-                if highlights_max_characters:
-                    contents_options["highlights"] = {"maxCharacters": int(highlights_max_characters)}
-                else:
-                    contents_options["highlights"] = True
-            if include_full_text:
-                contents_options["text"] = True
-
-            if contents_options:
-                payload["contents"] = contents_options
-            
-            # Make API request
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                "x-exa-integration": "dify-community-integration",
-            }
-            response = requests.post(
-                "https://api.exa.ai/search",
-                json=payload,
-                headers=headers
-            )
-            
-            response.raise_for_status()
-            result_data = response.json()
-            
-            # Yield the raw JSON response first
-            yield self.create_json_message(result_data)
-
-            # Format and yield the results as markdown text
-            markdown_output = self._format_results_as_markdown(result_data, query)
-            yield self.create_text_message(markdown_output)
-            
-            # Extract urls and images from results
-            urls = []
+            result_data = post(self.runtime.credentials["exa_api_key"], "search", payload)
+            results = result_data.get("results", [])
+            urls = [result["url"] for result in results if result.get("url")]
             images = []
-            raw_results = result_data.get("results", [])
-            for result in raw_results:
-                if url := result.get("url"):
-                    urls.append(url)
-                # Handle image extraction with proper validation
-                if "image" in result:
-                    image = result["image"]
-                    if isinstance(image, str) and image.strip():  # Ensure non-empty string
-                        if image.startswith(('http://', 'https://')):  # Basic URL validation
-                            images.append(image)
+            for result in results:
+                image = result.get("image")
+                if isinstance(image, str) and image.startswith(("http://", "https://")):
+                    images.append(image)
 
-            # Debug output
-            print("\n===== EXTRACTED URLS AND IMAGES =====")
-            print("URLs:", urls)
-            print("Images:", images)
-            print("===== END OF EXTRACTION =====\n")
-
-            # Yield urls and images as separate variables
+            yield self.create_json_message(result_data)
+            yield self.create_text_message(self._format_results_as_markdown(results, query))
             yield self.create_variable_message("urls", urls)
             yield self.create_variable_message("images", images)
+        except Exception as error:
+            yield self.create_json_message({"status": "error", "error": str(error)})
+            yield self.create_text_message(f"Error: {error}")
 
-            # Debug output
-            print("\n===== AFTER create_variable_message =====")
-            print("Variable 'urls' sent to Dify:")
-            print(json.dumps(urls, indent=2))
-            print("Variable 'images' sent to Dify:")
-            print(json.dumps(images, indent=2))
-            print("===== END OF DEBUG OUTPUT =====\n")
-
-        except requests.RequestException as e:
-            error_message = f"Error when calling Exa Search API: {str(e)}"
-            if hasattr(e, 'response') and e.response is not None:
-                error_message += f" - Status code: {e.response.status_code}"
-                if hasattr(e.response, 'text'):
-                    error_message += f" - Response: {e.response.text}"
-            
-            yield self.create_json_message({
-                "status": "error",
-                "error": error_message
-            })
-            
-            yield self.create_text_message(f"Error: {error_message}")
-        except Exception as e:
-            error_message = f"Error: {str(e)}"
-            
-            yield self.create_json_message({
-                "status": "error",
-                "error": error_message
-            })
-            
-            yield self.create_text_message(f"Error: {error_message}")
-    
-    def _format_results_as_markdown(self, api_response: Dict, query: str) -> str:
-        """Format API response as a readable Markdown string"""
-        results = api_response.get("results", [])
-        
-        markdown = f"## Exa Search Results\n\n"
-        markdown += f"**Query:** {query}\n\n"
-        markdown += f"**Total Results:** {len(results)}\n\n"
-        
+    def _format_results_as_markdown(self, results: list[dict[str, Any]], query: str) -> str:
+        markdown = f"## Exa Search Results\n\n**Query:** {query}\n\n**Total Results:** {len(results)}\n\n"
         if not results:
-            markdown += "No results found.\n"
-            return markdown
-        
-        # Add results
+            return markdown + "No results found.\n"
+
         for i, result in enumerate(results, 1):
-            title = result.get("title", "No title")
+            title = result.get("title") or "No title"
             url = result.get("url", "")
-            domain = result.get("domain", "Unknown source")
-            published_date = result.get("publishedDate", "")
-            author = result.get("author", "")
-            
+            domain = result.get("domain") or urlsplit(url).hostname or "Unknown source"
             markdown += f"### {i}. [{title}]({url})\n\n"
-            
-            # Add image if available
-            image_url = result.get("image", "")
-            if image_url:
-                markdown += f"![Image from {domain}]({image_url})\n\n"
-            
+            if image := result.get("image"):
+                markdown += f"![Image from {domain}]({image})\n\n"
             markdown += f"**Source:** {domain}\n"
-            
-            if published_date:
+            if published_date := result.get("publishedDate"):
                 markdown += f"**Published:** {published_date}\n"
-            
-            if author:
+            if author := result.get("author"):
                 markdown += f"**Author:** {author}\n"
-            
-            if "score" in result:
-                markdown += f"**Relevance Score:** {result['score']:.2f}\n"
-            
             markdown += "\n"
-            
-            # Add highlights if available
-            if "highlights" in result and result["highlights"]:
+
+            if highlights := result.get("highlights"):
                 markdown += "**Highlights:**\n\n"
-                for highlight in result["highlights"]:
-                    markdown += f"> {highlight}\n"
-                markdown += "\n"
-            
-            # Add text content if available
-            if "text" in result and result["text"]:
-                text_excerpt = result["text"]
-                # Limit to ~500 characters for readability
-                if len(text_excerpt) > 500:
-                    text_excerpt = text_excerpt[:500] + "..."
-                
-                markdown += "**Content Excerpt:**\n\n"
-                markdown += f"```\n{text_excerpt}\n```\n\n"
-            
+                markdown += "".join(f"> {highlight}\n" for highlight in highlights) + "\n"
+            if page_text := result.get("text"):
+                excerpt = page_text[:500] + ("..." if len(page_text) > 500 else "")
+                markdown += f"**Content Excerpt:**\n\n```\n{excerpt}\n```\n\n"
             markdown += "---\n\n"
-        
         return markdown

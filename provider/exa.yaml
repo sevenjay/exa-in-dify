@@ -30,7 +30,6 @@ credentials_for_provider:
 tools:
   - tools/exa_search.yaml
   - tools/exa_contents.yaml
-  - tools/exa_similar.yaml
   - tools/exa_anwser.yaml
 extra:
   python:

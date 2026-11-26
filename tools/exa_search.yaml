@@ -57,7 +57,7 @@ parameters:
       zh_Hans: 要执行的搜索类型。自动适用于大多数查询。
       pt_BR: O tipo de pesquisa a ser realizada. Auto é recomendado para a maioria das consultas.
       ja_JP: 実行する検索のタイプ。ほとんどのクエリには自動が推奨されます。
-    llm_description: The type of search to perform. Auto is recommended for most queries.
+    llm_description: Auto is recommended for most searches. Lite uses cached content. Deep Lite and Deep perform multi-step research.
     options:
       - label:
           en_US: Auto
@@ -66,11 +66,17 @@ parameters:
           ja_JP: 自動
         value: auto
       - label:
-          en_US: Fast
-          zh_Hans: 快速
-          pt_BR: Rápido
-          ja_JP: 高速
-        value: fast
+          en_US: Lite
+          zh_Hans: 轻量
+          pt_BR: Leve
+          ja_JP: ライト
+        value: lite
+      - label:
+          en_US: Deep Lite
+          zh_Hans: 轻量深度
+          pt_BR: Pesquisa profunda leve
+          ja_JP: ディープライト
+        value: deep-lite
       - label:
           en_US: Deep
           zh_Hans: 深度
@@ -159,17 +165,19 @@ parameters:
   - name: max_age_hours
     type: number
     required: false
+    min: -1
+    max: 720
     label:
       en_US: Max Age (Hours)
       zh_Hans: 最大缓存时间（小时）
       pt_BR: Idade Máxima (Horas)
       ja_JP: 最大キャッシュ時間（時間）
     human_description:
-      en_US: Freshness control. 0 = always crawl, -1 = cache only, 24 = cache if less than 24h old.
-      zh_Hans: 新鲜度控制。0 = 总是爬取，-1 = 仅缓存，24 = 如果缓存不到24小时则使用缓存。
-      pt_BR: Controle de frescor. 0 = sempre rastrear, -1 = apenas cache, 24 = cache se menos de 24h.
-      ja_JP: 鮮度制御。0 = 常にクロール、-1 = キャッシュのみ、24 = 24時間以内ならキャッシュ使用。
-    llm_description: Controls content freshness. 0 = always crawl, -1 = cache only, positive number = cache if younger than N hours.
+      en_US: Set the maximum age of cached content in hours. 0 requests live content and -1 uses the cache only. Leave empty in Lite mode.
+      zh_Hans: 设置缓存内容的最长有效期（小时）。0 请求实时内容，-1 仅使用缓存。轻量模式请留空。
+      pt_BR: Defina a idade máxima do cache em horas. 0 solicita conteúdo ao vivo e -1 usa apenas o cache. Deixe em branco no modo Leve.
+      ja_JP: キャッシュの最大経過時間を指定します。0 はライブ取得、-1 はキャッシュのみ。ライトでは空欄にします。
+    llm_description: Maximum cache age in hours. 0 requests live content and -1 uses only cached content. Omit in Lite mode.
     form: form
   - name: include_highlights
     type: boolean
@@ -190,17 +198,19 @@ parameters:
   - name: highlights_max_characters
     type: number
     required: false
+    min: 1
+    max: 1000000
     label:
       en_US: Highlights Max Characters
       zh_Hans: 高亮最大字符数
       pt_BR: Máx. Caracteres de Destaques
       ja_JP: ハイライト最大文字数
     human_description:
-      en_US: Maximum number of characters per highlight excerpt.
-      zh_Hans: 每段高亮摘要的最大字符数。
-      pt_BR: Número máximo de caracteres por trecho destacado.
-      ja_JP: ハイライト抜粋ごとの最大文字数。
-    llm_description: Maximum number of characters per highlight excerpt.
+      en_US: Maximum combined length of highlights per result in characters.
+      zh_Hans: 每个结果的高亮摘要总字符上限。
+      pt_BR: Limite total de caracteres dos destaques por resultado.
+      ja_JP: 結果ごとのハイライトの合計文字数の上限。
+    llm_description: Maximum combined length of highlights per result in characters.
     form: form
   - name: include_text
     type: boolean
@@ -231,7 +241,7 @@ parameters:
       zh_Hans: 要集中的数据类别。
       pt_BR: Uma categoria de dados para se concentrar.
       ja_JP: 集中するデータのカテゴリ。
-    llm_description: A data category to focus on.
+    llm_description: Company and People disallow publication date filters. People also disallows domain exclusions.
     options:
       - label:
           en_US: Company
@@ -246,11 +256,11 @@ parameters:
           ja_JP: 人物
         value: people
       - label:
-          en_US: Research Paper
-          zh_Hans: 研究论文
-          pt_BR: Artigo de Pesquisa
-          ja_JP: 研究論文
-        value: research paper
+          en_US: Publication
+          zh_Hans: 学术出版物
+          pt_BR: Publicação
+          ja_JP: 学術出版物
+        value: publication
       - label:
           en_US: News
           zh_Hans: 新闻
@@ -270,36 +280,6 @@ parameters:
           ja_JP: 財務報告
         value: financial report
     form: form
-  - name: includeText
-    type: string
-    required: false
-    label:
-      en_US: Include Text
-      zh_Hans: 包含文本
-      pt_BR: Incluir Texto
-      ja_JP: テキストを含める
-    human_description:
-      en_US: List of strings that must be present in webpage text of results. Currently, only 1 string is supported, of up to 5 words.
-      zh_Hans: 必须出现在结果的网页文本中的字符串列表。目前，只支持1个字符串，最多5个单词。
-      pt_BR: Lista de strings que devem estar presentes no texto da página dos resultados. Atualmente, apenas 1 string é suportada, de até 5 palavras.
-      ja_JP: 結果のウェブページテキストに存在する必要がある文字列のリスト。現在、最大5単語の1つの文字列のみがサポートされています。
-    llm_description: List of strings that must be present in webpage text of results. Currently, only 1 string is supported, of up to 5 words.
-    form: llm
-  - name: excludeText
-    type: string
-    required: false
-    label:
-      en_US: Exclude Text
-      zh_Hans: 排除文本
-      pt_BR: Excluir Texto
-      ja_JP: テキストを除外
-    human_description:
-      en_US: List of strings that must not be present in webpage text of results. Currently, only 1 string is supported, of up to 5 words.
-      zh_Hans: 不能出现在结果的网页文本中的字符串列表。目前，只支持1个字符串，最多5个单词。
-      pt_BR: Lista de strings que não devem estar presentes no texto da página dos resultados. Atualmente, apenas 1 string é suportada, de até 5 palavras.
-      ja_JP: 結果のウェブページテキストに存在してはならない文字列のリスト。現在、最大5単語の1つの文字列のみがサポートされています。
-    llm_description: List of strings that must not be present in webpage text of results. Currently, only 1 string is supported, of up to 5 words.
-    form: llm
 extra:
   python:
     source: tools/exa_search.py

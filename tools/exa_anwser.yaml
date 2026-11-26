@@ -75,8 +75,20 @@ parameters:
           pt_BR: Exa Pro
           ja_JP: Exa Pro
         value: exa-pro
+      - label:
+          en_US: Exa Research
+          zh_Hans: Exa Research
+          pt_BR: Exa Research
+          ja_JP: Exa Research
+        value: exa-research
+      - label:
+          en_US: Exa Fast
+          zh_Hans: Exa Fast
+          pt_BR: Exa Fast
+          ja_JP: Exa Fast
+        value: exa-fast
     form: form
 
 extra:
   python:
-    source: tools/exa_anwser.py 
+    source: tools/exa_anwser.py
